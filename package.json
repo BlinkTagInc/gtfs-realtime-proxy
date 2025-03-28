@@ -1,0 +1,44 @@
+{
+  "name": "gtfs-realtime-proxy",
+  "description": "An API to retrieve GTFS-Realtime data and add CORS headers",
+  "keywords": [
+    "transit",
+    "gtfs-realtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/BlinkTagInc/gtfs-realtime-proxy.git"
+  },
+  "license": "MIT",
+  "author": "Brendan Nee <brendan@blinktag.com>",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "next": "^15.2.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/react": "^19.0.12",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "prettier": {
+    "singleQuote": true
+  },
+  "lint-staged": {
+    "*.js": "prettier --write",
+    "*.jsx": "prettier --write",
+    "*.ts": "prettier --write",
+    "*.tsx": "prettier --write",
+    "*.json": "prettier --write"
+  }
+}
