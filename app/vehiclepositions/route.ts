@@ -1,47 +1,36 @@
 import { NextResponse } from 'next/server';
+import { buildCacheHeaders, corsHeaders, fetchProtobuf, harden } from '@/lib/server/http';
 
 export const maxDuration = 5;
-export const revalidate = 15;
+export const dynamic = 'force-dynamic';
+
+const MAX_AGE_SECONDS = 15 as const;
+const SWR_SECONDS = 5 as const;
+const STALE_IF_ERROR_SECONDS = 60 as const;
 
 const FETCH_URL = 'https://svc.metrotransit.org/mtgtfs/vehiclepositions.pb';
 const FETCH_HEADERS = {};
 const FETCH_TIMEOUT_MS = 2000;
 
-async function fetchData() {
-  const response = await fetch(FETCH_URL, {
-    headers: FETCH_HEADERS,
-    next: { revalidate },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch data from the target URL');
-  }
-
-  return response.arrayBuffer();
-}
-
 export async function GET() {
-  const corsHeaders = {
-    'Access-Control-Allow-Methods': 'GET',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Origin': '*',
-  };
-
   try {
-    const data = await fetchData();
+    const upstream = await fetchProtobuf(FETCH_URL, {
+      headers: FETCH_HEADERS,
+      timeoutMs: FETCH_TIMEOUT_MS,
+    });
 
-    return new NextResponse(data, {
+    const res = new NextResponse(upstream.body, {
       status: 200,
       headers: {
-        'Content-Type': 'application/octet-stream',
-        'Cache-Control': `max-age=0, s-maxage=${revalidate}`,
+        'Content-Type': 'application/x-protobuf',
+        ...buildCacheHeaders(MAX_AGE_SECONDS, SWR_SECONDS, STALE_IF_ERROR_SECONDS),
         ...corsHeaders,
       },
     });
+    return harden(res);
   } catch (error) {
     console.error(error);
-    return NextResponse.json(
+    const res = NextResponse.json(
       { error: true },
       {
         status: 500,
@@ -51,5 +40,29 @@ export async function GET() {
         },
       },
     );
+    return harden(res);
   }
+}
+
+export function OPTIONS() {
+  const res = new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Max-Age': '600',
+      ...corsHeaders,
+    },
+  });
+  return harden(res);
+}
+
+export async function HEAD() {
+  const res = new NextResponse(null, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/x-protobuf',
+      ...buildCacheHeaders(MAX_AGE_SECONDS, SWR_SECONDS, STALE_IF_ERROR_SECONDS),
+      ...corsHeaders,
+    },
+  });
+  return harden(res);
 }
