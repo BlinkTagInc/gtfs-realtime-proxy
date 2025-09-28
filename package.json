@@ -27,17 +27,17 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "next": "^15.2.4",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
-    "@types/node": "^22.13.14",
-    "@types/react": "^19.0.12",
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.14",
     "husky": "^9.1.7",
-    "lint-staged": "^15.5.0",
-    "prettier": "^3.5.3",
-    "typescript": "^5.8.2"
+    "lint-staged": "^16.2.1",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
   },
   "prettier": {
     "singleQuote": true
