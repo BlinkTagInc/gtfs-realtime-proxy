@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { buildCacheHeaders, corsHeaders, fetchProtobuf, harden } from '@/lib/server/http';
+import {
+  buildCacheHeaders,
+  corsHeaders,
+  fetchProtobuf,
+  harden,
+} from '@/lib/server/http';
 
 export const maxDuration = 5;
 export const dynamic = 'force-dynamic';
@@ -10,7 +15,7 @@ const STALE_IF_ERROR_SECONDS = 60 as const;
 
 const FETCH_URL = 'https://svc.metrotransit.org/mtgtfs/tripupdates.pb';
 const FETCH_HEADERS = {};
-const FETCH_TIMEOUT_MS = 2000;
+const FETCH_TIMEOUT_MS = 4000;
 
 export async function GET() {
   try {
@@ -23,7 +28,11 @@ export async function GET() {
       status: 200,
       headers: {
         'Content-Type': 'application/x-protobuf',
-        ...buildCacheHeaders(MAX_AGE_SECONDS, SWR_SECONDS, STALE_IF_ERROR_SECONDS),
+        ...buildCacheHeaders(
+          MAX_AGE_SECONDS,
+          SWR_SECONDS,
+          STALE_IF_ERROR_SECONDS,
+        ),
         ...corsHeaders,
       },
     });
@@ -60,7 +69,11 @@ export async function HEAD() {
     status: 200,
     headers: {
       'Content-Type': 'application/x-protobuf',
-      ...buildCacheHeaders(MAX_AGE_SECONDS, SWR_SECONDS, STALE_IF_ERROR_SECONDS),
+      ...buildCacheHeaders(
+        MAX_AGE_SECONDS,
+        SWR_SECONDS,
+        STALE_IF_ERROR_SECONDS,
+      ),
       ...corsHeaders,
     },
   });
