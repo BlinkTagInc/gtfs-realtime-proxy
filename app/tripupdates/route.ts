@@ -4,6 +4,7 @@ import {
   corsHeaders,
   fetchProtobuf,
   harden,
+  rejectQueryParameters,
 } from '@/lib/server/http';
 
 export const maxDuration = 5;
@@ -15,13 +16,16 @@ const STALE_IF_ERROR_SECONDS = 60 as const;
 
 const FETCH_URL = 'https://svc.metrotransit.org/mtgtfs/tripupdates.pb';
 const FETCH_HEADERS = {};
-const FETCH_TIMEOUT_MS = 4000;
+const FETCH_ATTEMPT_TIMEOUT_MS = 4000;
 
-export async function GET() {
+export async function GET(request: Request) {
+  const rejected = rejectQueryParameters(request);
+  if (rejected) return rejected;
+
   try {
     const upstream = await fetchProtobuf(FETCH_URL, {
       headers: FETCH_HEADERS,
-      timeoutMs: FETCH_TIMEOUT_MS,
+      attemptTimeoutMs: FETCH_ATTEMPT_TIMEOUT_MS,
     });
 
     const res = new NextResponse(upstream.body, {
@@ -64,7 +68,10 @@ export function OPTIONS() {
   return harden(res);
 }
 
-export async function HEAD() {
+export async function HEAD(request: Request) {
+  const rejected = rejectQueryParameters(request);
+  if (rejected) return rejected;
+
   const res = new NextResponse(null, {
     status: 200,
     headers: {
