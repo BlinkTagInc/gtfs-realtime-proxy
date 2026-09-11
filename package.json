@@ -27,15 +27,15 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "next": "^16.3.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "next": "^16.3.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "@types/react": "^19.2.18",
+    "@types/react": "^19.3.0",
     "husky": "^9.1.7",
-    "lint-staged": "^17.3.0",
+    "lint-staged": "^17.5.1",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2"
   },
@@ -54,5 +54,5 @@
     "*.tsx": "prettier --write",
     "*.json": "prettier --write"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@12.3.4"
 }
