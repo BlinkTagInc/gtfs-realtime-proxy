@@ -1,195 +1,161 @@
-import { NextResponse } from 'next/server';
+const feeds = {
+  vehiclepositions: 'VEHICLEPOSITIONS',
+  tripupdates: 'TRIPUPDATES',
+  alerts: 'ALERTS',
+} as const;
 
-export const corsHeaders = {
+const commonHeaders = {
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Origin': '*',
-} as const;
-
-const DEFAULT_DEADLINE_MS = 4500;
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 2000;
-const DEFAULT_RETRY_DELAYS_MS = [150, 300] as const;
-
-type FetchUpstreamOptions = {
-  headers?: HeadersInit;
-  deadlineMs?: number;
-  attemptTimeoutMs?: number;
-  retryDelaysMs?: readonly number[];
-  allowedContentTypes: readonly string[];
-  maxBytes: number;
+  'X-Content-Type-Options': 'nosniff',
+  Vary: 'Accept-Encoding',
 };
 
-export function buildCacheHeaders(
-  maxAge: number,
-  swr: number,
-  staleIfError: number,
-) {
-  const value = `public, max-age=0, s-maxage=${maxAge}, stale-while-revalidate=${swr}, stale-if-error=${staleIfError}, must-revalidate`;
-  return {
-    'Cache-Control': value,
-    'CDN-Cache-Control': value,
-  };
-}
+const protobufTypes = new Set([
+  'application/x-protobuf',
+  'application/protobuf',
+  'application/vnd.google.protobuf',
+  'application/octet-stream',
+]);
+const maxBytes = 5 * 1024 * 1024;
 
-export function harden(res: NextResponse) {
-  // Remove cookies and pin a safe Vary for maximal CDN cacheability.
-  res.headers.set('Vary', 'Accept-Encoding');
-  res.headers.set('X-Content-Type-Options', 'nosniff');
-  res.headers.delete('Set-Cookie');
-  return res;
-}
-
-export function rejectQueryParameters(request: Request) {
-  if (!new URL(request.url).search) return null;
-
-  return harden(
-    NextResponse.json(
-      { error: true },
-      {
-        status: 400,
-        headers: {
-          'Cache-Control': 'no-store',
-          ...corsHeaders,
-        },
-      },
-    ),
-  );
-}
-
-export async function withRetry<T>(
-  fn: (remainingMs: number) => Promise<T>,
-  delays: readonly number[] = DEFAULT_RETRY_DELAYS_MS,
-  deadlineMs: number = DEFAULT_DEADLINE_MS,
-) {
-  const deadline = performance.now() + deadlineMs;
-  let lastError: unknown;
-
-  for (let i = 0; i <= delays.length; i++) {
-    const remainingMs = Math.floor(deadline - performance.now());
-    if (remainingMs <= 0) break;
-
-    try {
-      return await fn(remainingMs);
-    } catch (e) {
-      lastError = e;
-    }
-
-    if (i < delays.length) {
-      const remainingAfterAttemptMs = Math.floor(deadline - performance.now());
-      const delayMs = delays[i];
-      if (remainingAfterAttemptMs <= delayMs) break;
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
+function headerConfig(raw?: string): Record<string, string> {
+  const values = JSON.parse(raw ?? '{}');
+  if (
+    !values ||
+    typeof values !== 'object' ||
+    Array.isArray(values) ||
+    Object.values(values).some((value) => typeof value !== 'string')
+  ) {
+    throw new Error('Invalid header configuration');
   }
-
-  throw lastError;
+  return Object.fromEntries(new Headers(values));
 }
 
-function validateAndLimitResponse(
-  response: Response,
-  allowedContentTypes: readonly string[],
-  maxBytes: number,
-) {
-  const contentType = response.headers
-    .get('Content-Type')
-    ?.split(';', 1)[0]
+function seconds(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error('Invalid cache duration');
+  }
+  return Number(raw);
+}
+
+async function readFeed(response: Response) {
+  const type = response.headers
+    .get('content-type')
+    ?.split(';')[0]
     .trim()
     .toLowerCase();
+  if (
+    response.status !== 200 ||
+    !protobufTypes.has(type) ||
+    !response.body ||
+    Number(response.headers.get('content-length')) > maxBytes
+  ) {
+    await response.body?.cancel();
+    throw new Error('Unexpected upstream response');
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      throw new Error('Feed exceeds size limit');
+    }
+    chunks.push(value as Uint8Array<ArrayBuffer>);
+  }
+  if (size === 0) {
+    throw new Error('Empty feed');
+  }
+  return new Blob(chunks, { type: 'application/x-protobuf' });
+}
 
-  if (!contentType || !allowedContentTypes.includes(contentType)) {
-    void response.body?.cancel();
-    throw new Error(
-      `Unexpected upstream Content-Type: ${contentType ?? 'none'}`,
+export function preflight() {
+  return new Response(null, {
+    status: 204,
+    headers: { ...commonHeaders, 'Access-Control-Max-Age': '600' },
+  });
+}
+
+export async function feedResponse(request: Request, feed: keyof typeof feeds) {
+  function failure(status: number) {
+    return new Response(request.method === 'HEAD' ? null : '{"error":true}', {
+      status,
+      headers: {
+        ...commonHeaders,
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+  if (new URL(request.url).search) {
+    return failure(400);
+  }
+  const prefix = 'GTFS_' + feeds[feed];
+  const url = process.env[prefix + '_URL'];
+  if (!url) {
+    return failure(404);
+  }
+  let headers: Headers;
+  let cacheHeaders: Record<string, string>;
+  try {
+    headers = new Headers({
+      ...headerConfig(process.env.GTFS_HEADERS),
+      ...headerConfig(process.env[prefix + '_HEADERS']),
+    });
+    const protocol = new URL(url).protocol;
+    if (
+      protocol !== 'https:' &&
+      (protocol !== 'http:' || [...headers].length > 0)
+    ) {
+      throw new Error('Invalid upstream protocol');
+    }
+    const ttl = seconds(prefix + '_CACHE_SECONDS', feed === 'alerts' ? 60 : 15);
+    const browser = Math.min(ttl, seconds('GTFS_BROWSER_CACHE_SECONDS', ttl));
+    const swr = seconds('GTFS_SWR_SECONDS', 5);
+    const stale = seconds('GTFS_STALE_IF_ERROR_SECONDS', 60);
+    cacheHeaders = {
+      'Cache-Control': `public, max-age=${browser}, must-revalidate`,
+      'CDN-Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${swr}, stale-if-error=${stale}`,
+    };
+  } catch {
+    console.error(feed, 'invalid configuration');
+    return failure(500);
+  }
+  const signal = AbortSignal.timeout(4000);
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal,
+      cache: 'no-store',
+      redirect: [...headers].length ? 'error' : 'follow',
+    });
+    if (response.status !== 200) {
+      console.warn(feed, 'upstream HTTP', response.status);
+    }
+    const blob = await readFeed(response);
+    return new Response(request.method === 'HEAD' ? null : blob, {
+      headers: {
+        ...commonHeaders,
+        ...cacheHeaders,
+        'Content-Type': 'application/x-protobuf',
+      },
+    });
+  } catch {
+    console.warn(
+      feed,
+      signal.aborted ? 'upstream timeout' : 'upstream fetch failed',
     );
+    return failure(signal.aborted ? 504 : 502);
   }
-
-  const contentLengthHeader = response.headers.get('Content-Length');
-  if (contentLengthHeader !== null) {
-    const contentLength = Number(contentLengthHeader);
-    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
-      void response.body?.cancel();
-      throw new Error('Invalid upstream Content-Length');
-    }
-    if (contentLength > maxBytes) {
-      void response.body?.cancel();
-      throw new Error('Upstream response exceeds the size limit');
-    }
-  }
-
-  if (!response.body) return response;
-
-  let bytesRead = 0;
-  const limiter = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      bytesRead += chunk.byteLength;
-      if (bytesRead > maxBytes) {
-        throw new Error('Upstream response exceeds the size limit');
-      }
-      controller.enqueue(chunk);
-    },
-  });
-
-  return new Response(response.body.pipeThrough(limiter), {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-export async function fetchUpstream(
-  url: string,
-  opts: FetchUpstreamOptions,
-): Promise<Response> {
-  const headers = opts.headers ?? {};
-  const deadlineMs = opts.deadlineMs ?? DEFAULT_DEADLINE_MS;
-  const attemptTimeoutMs = opts.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
-  const retryDelaysMs = opts.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
-
-  const response = await withRetry(
-    async (remainingMs) => {
-      const res = await fetch(url, {
-        headers,
-        cache: 'no-store',
-        signal: AbortSignal.timeout(
-          Math.max(1, Math.min(attemptTimeoutMs, remainingMs)),
-        ),
-      });
-      if (!res.ok) {
-        void res.body?.cancel();
-        throw new Error(`Upstream fetch failed: ${res.status}`);
-      }
-      return res;
-    },
-    retryDelaysMs,
-    deadlineMs,
-  );
-
-  return validateAndLimitResponse(
-    response,
-    opts.allowedContentTypes,
-    opts.maxBytes,
-  );
-}
-
-export async function fetchProtobuf(
-  url: string,
-  opts?: {
-    headers?: HeadersInit;
-    deadlineMs?: number;
-    attemptTimeoutMs?: number;
-    maxBytes?: number;
-  },
-): Promise<Response> {
-  return fetchUpstream(url, {
-    headers: opts?.headers,
-    deadlineMs: opts?.deadlineMs,
-    attemptTimeoutMs: opts?.attemptTimeoutMs,
-    allowedContentTypes: [
-      'application/x-protobuf',
-      'application/protobuf',
-      'application/vnd.google.protobuf',
-      'application/octet-stream',
-    ],
-    maxBytes: opts?.maxBytes ?? 5 * 1024 * 1024,
-  });
 }
