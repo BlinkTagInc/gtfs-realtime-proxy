@@ -120,10 +120,11 @@ export async function feedResponse(request: Request, feed: keyof typeof feeds) {
     ) {
       throw new Error('Invalid upstream protocol');
     }
-    const ttl = seconds(prefix + '_CACHE_SECONDS', feed === 'alerts' ? 60 : 15);
+    const isAlerts = feed === 'alerts';
+    const ttl = seconds(prefix + '_CACHE_SECONDS', isAlerts ? 60 : 5);
     const browser = Math.min(ttl, seconds('GTFS_BROWSER_CACHE_SECONDS', ttl));
-    const swr = seconds('GTFS_SWR_SECONDS', 5);
-    const stale = seconds('GTFS_STALE_IF_ERROR_SECONDS', 60);
+    const swr = seconds('GTFS_SWR_SECONDS', isAlerts ? 5 : 0);
+    const stale = seconds('GTFS_STALE_IF_ERROR_SECONDS', isAlerts ? 120 : 30);
     cacheHeaders = {
       'Cache-Control': `public, max-age=${browser}, must-revalidate`,
       'CDN-Cache-Control': `public, s-maxage=${ttl}, stale-while-revalidate=${swr}, stale-if-error=${stale}`,
