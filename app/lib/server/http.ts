@@ -19,6 +19,48 @@ const protobufTypes = new Set([
   'application/octet-stream',
 ]);
 const maxBytes = 5 * 1024 * 1024;
+const maxErrorBytes = 4 * 1024;
+
+async function upstreamErrorDetails(response: Response) {
+  const details = {
+    statusText: response.statusText,
+    contentType: response.headers.get('content-type'),
+    body: '',
+    truncated: false,
+    bodyReadError: undefined as string | undefined,
+  };
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return details;
+  }
+  const decoder = new TextDecoder();
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      const remaining = maxErrorBytes - size;
+      details.body += decoder.decode(value.subarray(0, remaining), {
+        stream: true,
+      });
+      size += value.byteLength;
+      if (size >= maxErrorBytes) {
+        details.truncated = true;
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch (error) {
+    details.bodyReadError =
+      error instanceof Error ? error.message : String(error);
+  } finally {
+    details.body += decoder.decode();
+    reader.releaseLock();
+  }
+  return details;
+}
 
 function headerConfig(raw?: string): Record<string, string> {
   const values = JSON.parse(raw ?? '{}');
@@ -142,7 +184,13 @@ export async function feedResponse(request: Request, feed: keyof typeof feeds) {
       redirect: [...headers].length ? 'error' : 'follow',
     });
     if (response.status !== 200) {
-      console.warn(feed, 'upstream HTTP', response.status);
+      console.warn(
+        feed,
+        'upstream HTTP',
+        response.status,
+        await upstreamErrorDetails(response),
+      );
+      return failure(signal.aborted ? 504 : 502);
     }
     const blob = await readFeed(response);
     return new Response(request.method === 'HEAD' ? null : blob, {
@@ -152,10 +200,11 @@ export async function feedResponse(request: Request, feed: keyof typeof feeds) {
         'Content-Type': 'application/x-protobuf',
       },
     });
-  } catch {
+  } catch (error) {
     console.warn(
       feed,
       signal.aborted ? 'upstream timeout' : 'upstream fetch failed',
+      error instanceof Error ? error.message : String(error),
     );
     return failure(signal.aborted ? 504 : 502);
   }
